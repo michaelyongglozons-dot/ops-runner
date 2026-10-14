@@ -1,0 +1,40 @@
+# Heavy-job runner (2026-10-14). This PUBLIC repo only lends GitHub's free minutes: it checks out the private
+# automation repo with a read-only deploy key, then claims jobs from the Supabase queue (gm_heavy_jobs) for up to
+# 5.5 h and exits. The hourly schedule just makes sure a runner is almost always alive (GitHub's cron may start late;
+# the queue itself is polled every 30 s, so jobs still start on time). Logs are muted on purpose: this repo's logs
+# are public, so the runner prints only job ids and done/error; details live in the database.
+name: runner
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 * * * *"
+concurrency:
+  group: runner
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: michaelyongglozons-dot/glozons-automation
+          ref: master
+          ssh-key: ${{ secrets.AUTOMATION_DEPLOY_KEY }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          pip install -q -r requirements.txt
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          python -m playwright install --with-deps chromium > /dev/null 2>&1 || true
+      - name: Run the queue (quiet)
+        env:
+          SUPABASE_SYSTEM_CREDS: ${{ secrets.SUPABASE_SYSTEM_CREDS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DRIVE_OAUTH_TOKEN: ${{ secrets.DRIVE_OAUTH_TOKEN }}
+          RUNNER_NAME: github-public
+          PYTHONIOENCODING: utf-8
+        run: python -u agents/heavy_runner.py --loop --interval 30 --quiet --max-minutes 330
